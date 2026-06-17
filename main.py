@@ -1,6 +1,7 @@
 import cv2
 import mediapipe as mp
 
+
 # Path to the MediaPipe hand landmark model file
 MODEL_PATH = "hand_landmarker.task"
 
@@ -49,11 +50,20 @@ def draw_connecting_lines(frame, left_landmarks, right_landmarks, w, h):
     # Draw a line from left index tip to left thumb tip
     cv2.line(frame, left_index_tip, left_thumb_tip, BLUE, 1)
 
-# Essnetially I will be applying a mask to the region between the two hands and then applying a distortion effect to that region.
-# the effect will be an anime style video effect - use hugging face models to generate the effect. The distortion will be applied to the region between the two hands, and the rest of the frame will remain unchanged. The distortion effect will be applied in real-time as the hands move.
+'''
+Essnetially I will be applying a mask to the region between the two hands
+and then applying a distortion effect to that region.
+
+The effect will be an anime style video effect - use hugging face models to generate the effect. 
+
+The distortion will be applied to the region between the two hands, and the rest of the frame will remain unchanged. 
+The effect will be applied in real-time as the hands move.
+'''
 def distort_region(frame):
     pass
 
+
+# Camera Class to handle webcam input and hand landmark detection
 class Cameras:
     def __init__(self, frame_width=640, frame_height=480):
         self.frame_width = frame_width
