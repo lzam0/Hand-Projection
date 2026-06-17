@@ -24,7 +24,7 @@ def draw_landmarks(frame, hand_landmarks, w, h):
 
     # Draw a circle at each landmark position
     for x, y in points:
-        cv2.circle(frame, (x, y), 4, (255, 255, 255), -1)
+        cv2.circle(frame, (x, y), 2, (255, 255, 255), -1)
 
 class Cameras:
     def __init__(self, frame_width=640, frame_height=480):
