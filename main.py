@@ -1,6 +1,7 @@
 import cv2
 import mediapipe as mp
 import numpy as np
+import threading
 
 # Path to the MediaPipe hand landmark model file
 MODEL_PATH = "hand_landmarker.task"
@@ -140,7 +141,7 @@ def risograph_distortion(frame, pt_a, pt_b, pt_c, pt_d, buffers):
 
 # Camera Class to handle webcam input and hand landmark detection
 class Cameras:
-    def __init__(self, frame_width=640, frame_height=480):
+    def __init__(self, frame_width=1920, frame_height=1080):
         self.frame_width = frame_width
         self.frame_height = frame_height
 
@@ -153,6 +154,7 @@ class Cameras:
         # Configure webcam resolution
         stream.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
         stream.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
+        stream.set(cv2.CAP_PROP_FPS, 60)
 
         # Alias MediaPipe Tasks classes for brevity
         BaseOptions = mp.tasks.BaseOptions
@@ -177,11 +179,35 @@ class Cameras:
             np.zeros((h, w, 3), dtype=np.uint8), # xray
         )
 
-        last_result = None
-        frame_count = 0
+        # Shared state between main thread (render) and detection thread
+        latest_frame = [None]
+        last_result  = [None]
+        frame_lock   = threading.Lock()
+        result_lock  = threading.Lock()
+        new_frame    = threading.Event()
+        stop_event   = threading.Event()
+
+        def detection_loop(landmarker):
+            while not stop_event.is_set():
+                # Wait until the main loop deposits a new frame (timeout avoids deadlock on exit)
+                new_frame.wait(timeout=0.1)
+                new_frame.clear()
+                with frame_lock:
+                    f = latest_frame[0]
+                if f is None:
+                    continue
+                rgb = cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                result = landmarker.detect(mp_image)
+                with result_lock:
+                    last_result[0] = result
+
         prev_tick = cv2.getTickCount()
 
         with HandLandmarker.create_from_options(options) as landmarker:
+            det_thread = threading.Thread(target=detection_loop, args=(landmarker,), daemon=True)
+            det_thread.start()
+
             while True:
                 success, frame = stream.read()
                 if not success:
@@ -190,15 +216,20 @@ class Cameras:
                 # Flip horizontally for a natural mirrored view
                 mirrored_frame = cv2.flip(frame, 1)
 
-                rgb = cv2.cvtColor(mirrored_frame, cv2.COLOR_BGR2RGB)
-                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                last_result = landmarker.detect(mp_image)
+                # Hand off a copy to the detection thread and signal it
+                with frame_lock:
+                    latest_frame[0] = mirrored_frame.copy()
+                new_frame.set()
 
-                if last_result and last_result.hand_landmarks:
+                # Render using whatever the detection thread last produced
+                with result_lock:
+                    result = last_result[0]
+
+                if result and result.hand_landmarks:
                     # Build a dict of {handedness: landmarks} for easy lookup
                     # Mirrored frame flips left/right, so MediaPipe's labels are swapped
                     hands = {}
-                    for landmarks, handedness in zip(last_result.hand_landmarks, last_result.handedness):
+                    for landmarks, handedness in zip(result.hand_landmarks, result.handedness):
                         label = handedness[0].category_name  # "Left" or "Right"
                         hands[label] = landmarks
                         # draw_landmarks(mirrored_frame, landmarks, w, h)
@@ -220,6 +251,9 @@ class Cameras:
                 # Exit on Esc key
                 if cv2.waitKey(1) & 0xFF == 27:
                     break
+
+            stop_event.set()
+            det_thread.join()
 
         stream.release()
         cv2.destroyAllWindows()
