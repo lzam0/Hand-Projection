@@ -21,6 +21,56 @@ LANDMARK_CONNECTIONS = [
     (0,17),                         # palm base
 ]
 
+# Landmark indices: (tip, pip) for each of the four fingers (thumb handled separately)
+FINGER_JOINTS = [(8, 6), (12, 10), (16, 14), (20, 18)]
+
+# Helper function to compute Euclidean distance between two landmarks
+def _dist(a, b):
+    return ((a.x - b.x) ** 2 + (a.y - b.y) ** 2) ** 0.5
+
+# Determine if a hand is open or closed based on the relative positions of finger tips and pip joints
+def is_hand_open(hand_landmarks):
+    # A finger counts as extended if its tip is farther from the wrist than its pip joint
+    wrist = hand_landmarks[0]
+    for tip_idx, pip_idx in FINGER_JOINTS:
+        if _dist(hand_landmarks[tip_idx], wrist) <= _dist(hand_landmarks[pip_idx], wrist):
+            return False
+    # Thumb: compare tip (4) to its mcp joint (2)
+    if _dist(hand_landmarks[4], wrist) <= _dist(hand_landmarks[2], wrist):
+        return False
+    return True
+
+def is_pinching(hand_landmarks):
+    # Pinch = thumb tip (4) close to index tip (8), relative to hand size (wrist-to-middle-mcp)
+    hand_size = _dist(hand_landmarks[0], hand_landmarks[9])
+    if hand_size == 0:
+        return False
+    return _dist(hand_landmarks[4], hand_landmarks[8]) / hand_size < 0.4
+
+def draw_hand_status(frame, hands):
+    y = 55
+    for label in ("Left", "Right"):
+        if label not in hands:
+            continue
+        landmarks = hands[label]
+        openness = "Open" if is_hand_open(landmarks) else "Closed"
+        pinch = "Yes" if is_pinching(landmarks) else "No"
+        text = f"{label} hand: {openness}  Pinch: {pinch}"
+        cv2.putText(frame, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, WHITE, 2)
+        y += 30
+
+def change_filter(hands, filter_state):
+    # If both hands just started pinching (weren't both pinching last frame),
+    # flip the active filter between risograph and xray
+    both_pinching = (
+        "Left" in hands and "Right" in hands
+        and is_pinching(hands["Left"]) and is_pinching(hands["Right"])
+    )
+    if both_pinching and not filter_state["both_pinching"]:
+        filter_state["active"] = "xray" if filter_state["active"] == "risograph" else "risograph"
+    filter_state["both_pinching"] = both_pinching
+
+
 def draw_landmarks(frame, hand_landmarks, w, h):
     # Convert normalized landmark coordinates to pixel positions
     points = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
@@ -33,7 +83,7 @@ def draw_landmarks(frame, hand_landmarks, w, h):
     for x, y in points:
         cv2.circle(frame, (x, y), 2, WHITE, -1)
 
-def draw_index_connections(frame, left_landmarks, right_landmarks, w, h, buffers):
+def draw_index_connections(frame, left_landmarks, right_landmarks, w, h, buffers, effect="risograph"):
     # Get the index finger tip (landmark 8) pixel position for each hand
     left_index_tip  = (int(left_landmarks[8].x * w),  int(left_landmarks[8].y * h))
     right_index_tip = (int(right_landmarks[8].x * w), int(right_landmarks[8].y * h))
@@ -49,26 +99,8 @@ def draw_index_connections(frame, left_landmarks, right_landmarks, w, h, buffers
     # Draw a line from left index tip to left thumb tip
     cv2.line(frame, left_index_tip, left_thumb_tip, WHITE, 1)
 
-    risograph_distortion(frame, left_index_tip, right_index_tip, right_thumb_tip, left_thumb_tip, buffers)
+    EFFECTS[effect](frame, left_index_tip, right_index_tip, right_thumb_tip, left_thumb_tip, buffers)
 
-# middle finger to index finger connection
-def draw_middle_connections(frame, left_landmarks, right_landmarks, w, h, buffers):
-    # Get the middle finger tip (landmark 12) pixel position for each hand
-    left_middle_tip  = (int(left_landmarks[12].x * w),  int(left_landmarks[12].y * h))
-    right_middle_tip = (int(right_landmarks[12].x * w), int(right_landmarks[12].y * h))
-    left_index_tip  = (int(left_landmarks[8].x * w),  int(left_landmarks[8].y * h))
-    right_index_tip = (int(right_landmarks[8].x * w), int(right_landmarks[8].y * h))
-
-    # Draw a white line connecting the two middle finger tips
-    cv2.line(frame, left_middle_tip, right_middle_tip, WHITE, 1)
-    # Draw a white line connecting the two index finger tips
-    cv2.line(frame, left_index_tip, right_index_tip, WHITE, 1)
-    # Draw a line from right middle tip to right index tip
-    cv2.line(frame, right_middle_tip, right_index_tip, WHITE, 1)
-    # Draw a line from left middle tip to left index tip
-    cv2.line(frame, left_middle_tip, left_index_tip, WHITE, 1)
-
-    distort_region(frame, left_middle_tip, right_middle_tip, right_index_tip, left_index_tip, buffers)
 
 def _roi_bounds(pt_a, pt_b, pt_c, pt_d, frame_w, frame_h):
     xs = [pt_a[0], pt_b[0], pt_c[0], pt_d[0]]
@@ -76,6 +108,10 @@ def _roi_bounds(pt_a, pt_b, pt_c, pt_d, frame_w, frame_h):
     x0, y0 = max(min(xs), 0), max(min(ys), 0)
     x1, y1 = min(max(xs), frame_w), min(max(ys), frame_h)
     return x0, y0, x1, y1
+
+# -------------------------------------------------------------------------------------
+# FILTER EFFECTS
+# -------------------------------------------------------------------------------------
 
 # XRAY
 def distort_region(frame, pt_a, pt_b, pt_c, pt_d, buffers):
@@ -139,6 +175,15 @@ def risograph_distortion(frame, pt_a, pt_b, pt_c, pt_d, buffers):
 
     cv2.copyTo(roi_temp, roi_mask, roi)
 
+EFFECTS = {
+    "risograph": risograph_distortion,
+    "xray": distort_region,
+}
+
+# -------------------------------------------------------------------------------------
+# FILTER EFFECTS
+# -------------------------------------------------------------------------------------
+
 # Camera Class to handle webcam input and hand landmark detection
 class Cameras:
     def __init__(self, frame_width=1920, frame_height=1080):
@@ -187,6 +232,9 @@ class Cameras:
         new_frame    = threading.Event()
         stop_event   = threading.Event()
 
+        # Toggle state for pinch-to-switch-filter gesture
+        filter_state = {"active": "risograph", "both_pinching": False}
+
         def detection_loop(landmarker):
             while not stop_event.is_set():
                 # Wait until the main loop deposits a new frame (timeout avoids deadlock on exit)
@@ -234,10 +282,15 @@ class Cameras:
                         hands[label] = landmarks
                         # draw_landmarks(mirrored_frame, landmarks, w, h)
 
-                    # Draw connecting lines and x-ray effect when both hands are visible
+                    change_filter(hands, filter_state)
+
+                    # Draw connecting lines and the active filter effect when both hands are visible
                     if "Left" in hands and "Right" in hands:
-                        draw_index_connections(mirrored_frame, hands["Left"], hands["Right"], w, h, buffers)
-                        draw_middle_connections(mirrored_frame, hands["Left"], hands["Right"], w, h, buffers)
+                        draw_index_connections(mirrored_frame, hands["Left"], hands["Right"], w, h, buffers,
+                                                effect=filter_state["active"])
+                        # draw_middle_connections(mirrored_frame, hands["Left"], hands["Right"], w, h, buffers)
+
+                    draw_hand_status(mirrored_frame, hands)
 
                 # Calculate and draw FPS in top-left corner
                 now = cv2.getTickCount()
