@@ -47,8 +47,10 @@ def is_pinching(hand_landmarks):
         return False
     return _dist(hand_landmarks[4], hand_landmarks[8]) / hand_size < 0.4
 
+# Draw the status of each detected hand (open/closed, pinching) on the frame
 def draw_hand_status(frame, hands):
     y = 55
+    # Draw status for each hand
     for label in ("Left", "Right"):
         if label not in hands:
             continue
@@ -59,15 +61,18 @@ def draw_hand_status(frame, hands):
         cv2.putText(frame, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, WHITE, 2)
         y += 30
 
+FILTER_ORDER = ["risograph", "xray", "gaussian_blur"]
+
 def change_filter(hands, filter_state):
     # If both hands just started pinching (weren't both pinching last frame),
-    # flip the active filter between risograph and xray
+    # cycle the active filter to the next one in FILTER_ORDER
     both_pinching = (
         "Left" in hands and "Right" in hands
         and is_pinching(hands["Left"]) and is_pinching(hands["Right"])
     )
     if both_pinching and not filter_state["both_pinching"]:
-        filter_state["active"] = "xray" if filter_state["active"] == "risograph" else "risograph"
+        idx = FILTER_ORDER.index(filter_state["active"])
+        filter_state["active"] = FILTER_ORDER[(idx + 1) % len(FILTER_ORDER)]
     filter_state["both_pinching"] = both_pinching
 
 
@@ -101,7 +106,7 @@ def draw_index_connections(frame, left_landmarks, right_landmarks, w, h, buffers
 
     EFFECTS[effect](frame, left_index_tip, right_index_tip, right_thumb_tip, left_thumb_tip, buffers)
 
-
+# Helper function to compute the bounding box of a quadrilateral defined by four points, clamped to the frame dimensions
 def _roi_bounds(pt_a, pt_b, pt_c, pt_d, frame_w, frame_h):
     xs = [pt_a[0], pt_b[0], pt_c[0], pt_d[0]]
     ys = [pt_a[1], pt_b[1], pt_c[1], pt_d[1]]
@@ -175,9 +180,28 @@ def risograph_distortion(frame, pt_a, pt_b, pt_c, pt_d, buffers):
 
     cv2.copyTo(roi_temp, roi_mask, roi)
 
+def gaussian_blur_effect(frame, pt_a, pt_b, pt_c, pt_d, buffers):
+    mask, _, _ = buffers
+    fh, fw = frame.shape[:2]
+    x0, y0, x1, y1 = _roi_bounds(pt_a, pt_b, pt_c, pt_d, fw, fh)
+
+    # Build mask only within the bounding box of the four points
+    roi_mask = mask[y0:y1, x0:x1]
+    roi_mask[:] = 0
+    pts = np.array([pt_a, pt_b, pt_c, pt_d], dtype=np.int32) - np.array([x0, y0])
+    cv2.fillPoly(roi_mask, [pts], 255)
+
+    # Apply Gaussian blur to the ROI slice only
+    roi = frame[y0:y1, x0:x1]
+
+    # Blur amount can be adjusted by changing the kernel size (15, 15) to a larger or smaller odd number
+    blurred_roi = cv2.GaussianBlur(roi, (51, 51), 0)
+    cv2.copyTo(blurred_roi, roi_mask, roi)
+
 EFFECTS = {
     "risograph": risograph_distortion,
     "xray": distort_region,
+    "gaussian_blur": gaussian_blur_effect,
 }
 
 # -------------------------------------------------------------------------------------
@@ -232,7 +256,7 @@ class Cameras:
         new_frame    = threading.Event()
         stop_event   = threading.Event()
 
-        # Toggle state for pinch-to-switch-filter gesture
+        # Toggle state for pinch to switch filter gesture
         filter_state = {"active": "risograph", "both_pinching": False}
 
         def detection_loop(landmarker):
@@ -296,8 +320,7 @@ class Cameras:
                 now = cv2.getTickCount()
                 fps = cv2.getTickFrequency() / (now - prev_tick)
                 prev_tick = now
-                cv2.putText(mirrored_frame, f"FPS: {fps:.0f}", (10, 25),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, WHITE, 2)
+                # cv2.putText(mirrored_frame, f"FPS: {fps:.0f}", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, WHITE, 2)
 
                 cv2.imshow("Feed", mirrored_frame)
 
