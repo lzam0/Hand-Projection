@@ -2,16 +2,21 @@
 
 A real-time hand tracking application that detects both hands via webcam and applies visual effects to the region between them.
 
+## Demo
+
+![Hand Projection demo — applying visual effects to the region between both hands](demo.gif)
+
 ## Features
 
-- Real-time hand landmark detection using MediaPipe
+- Real-time hand landmark detection using MediaPipe, running on a background thread for smooth rendering
 - Detects and distinguishes left and right hands
-- Draws skeletal hand landmarks on the video feed
-- Connects finger tips across both hands with boundary lines
-- Applies visual effects to the region between the hands:
-  - **X-ray effect** — inverted, blue-tinted grayscale (middle finger region)
-  - **Risograph effect** — colour channel misregistration, grain, and warm pink/teal tint (index finger region)
-- FPS counter in the top-left corner
+- Connects the index finger tips and thumb tips of both hands with boundary lines to form the effect region
+- Applies the active visual effect to the region between the hands:
+  - **Risograph effect** — colour channel misregistration, grain, and warm pink/teal tint
+  - **X-ray effect** — inverted, blue-tinted grayscale
+  - **Gaussian blur effect** — heavy blur of everything inside the region
+- **Pinch gesture to switch filters** — pinch thumb and index finger on both hands at the same time to cycle to the next effect
+- Per-hand status overlay showing whether each hand is open or closed, and whether it is pinching
 
 ## Requirements
 
@@ -40,8 +45,8 @@ python3 main.py
 ```
 
 - Hold both hands in front of the webcam
-- The region between your index fingers and thumbs shows the **risograph** effect
-- The region between your middle fingers and index fingers shows the **x-ray** effect
+- The quadrilateral between your index finger tips and thumb tips shows the active effect (risograph by default)
+- Pinch both hands simultaneously (thumb tip to index tip) to cycle through the effects: risograph → x-ray → gaussian blur
 - Press `Esc` to quit
 
 ## How It Works
@@ -52,6 +57,9 @@ MediaPipe detects 21 landmarks per hand. The app uses landmark indices to find s
 |----------|--------|
 | 4 | Thumb tip |
 | 8 | Index finger tip |
-| 12 | Middle finger tip |
 
-The four corner points of each effect region form a quadrilateral mask. Effects are applied only within that mask and processed on the bounding box of the region (not the full frame) to keep performance high.
+The four corner points (both index tips and both thumb tips) form a quadrilateral mask. Effects are applied only within that mask and processed on the bounding box of the region (not the full frame) to keep performance high.
+
+Hand detection runs on a separate thread: the main loop hands off each frame and renders using the most recent detection result, so the video feed stays responsive even when detection is slower than the camera.
+
+A pinch is detected when the thumb tip and index tip are close together relative to the hand's size. When both hands transition into a pinch on the same frame, the active filter advances to the next one in the cycle.
